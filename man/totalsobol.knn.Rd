@@ -7,28 +7,28 @@
 totalsobol.knn(
   X,
   y,
-  noise = TRUE,
-  n.knn = 2,
+  noise,
+  n.knn = NULL,
   n.mc = nrow(X),
-  mc.option = "random",
+  twin.mc = FALSE,
   rescale = TRUE,
   parl = NULL
 )
 }
 \arguments{
-\item{X}{a matrix or data frame containing the inputs.}
+\item{X}{a matrix or data frame for the factors / predictors.}
 
-\item{y}{a vector containing the outputs.}
+\item{y}{a vector for the responses.}
 
-\item{noise}{a logical indicating whether the outputs are noisy.}
+\item{noise}{a logical indicating whether the responses are noisy.}
 
-\item{n.knn}{number of nearest-neighbors for the inner loop conditional variance estimation.}
+\item{n.knn}{number of nearest-neighbors for the inner loop conditional variance estimation. \code{n.knn=2} is recommended for regression, and \code{n.knn=3} for binary classification.}
 
 \item{n.mc}{number of Monte Carlo samples for the outer loop expectation estimation.}
 
-\item{mc.option}{option for the Monte Carlo samples. The options are random(default)/twinning. See below for details.}
+\item{twin.mc}{a logical indicating whether to use twinning subsamples, otherwise random subsamples are used. It is supported when the reduction ratio is at least 2.}
 
-\item{rescale}{a logical indicating whether continuous inputs is rescaled to zero mean unit variance.}
+\item{rescale}{a logical logical indicating whether to standardize the factors / predictors.}
 
 \item{parl}{number of cores on which to parallelize the computation. If \code{NULL}, then no parallelization is done.}
 }
@@ -43,7 +43,7 @@ For large datasets, we support the use of subsample to reduce the computational 
 }
 \details{
 \code{totalsobol.knn} provides consistent estimation of the total Sobol' indices (Sobol, 1993) from scattered data.
-When the output is clean/noiseless (\code{noise=FALSE}), \code{totalsobol.knn} implements the nearest-neighbor estimator proposed in Broto et al. (2020).
+When the output is clean/noiseless (\code{noise=FALSE}), \code{totalsobol.knn} implements the Nearest-Neighbor estimator proposed in Broto et al. (2020).
 See \code{shapleysobol_knn} from the \pkg{sensitivity} package for another implementation of the nearest-neighbor estimator.
 When the output is noisy (\code{noise=TRUE}), \code{totalsobol.knn} implements the Noise-Adjusted Nearest-Neighbor (NANNE) estimator (Huang and Joseph, 2024).
 NANNE estimator can correct the estimation bias of the nearest-neighbor estimator caused by the random noise.
@@ -58,7 +58,7 @@ Also, parallel computation is also supported via the \pkg{parallel} package.
 
 Last, for large datasets, we support the use of subsamples for further acceleration.
 Use argument \code{n.mc} to specify the number of subsamples.
-Two options (argument \code{mc.option}) are available for finding the subsamples: random and twinning (Vakayil and Joseph, 2022).
+Two options are available for finding the subsamples: random and twinning (Vakayil and Joseph, 2022).
 Twinning is able to find subsamples that better represent the big data, i.e.,
 providing a more accurate estimation, but at a slightly higher computational cost.
 For more details, please see the \pkg{twinning} package.
@@ -80,11 +80,11 @@ print(round(tsi,3)) # Analytical Total Sobol' Indices: 0.558, 0.442, 0.244
 
 }
 \references{
-Broto, B., Bachoc, F., & Depecker, M. (2020). Variance reduction for estimation of Shapley effects and adaptation to unknown input distribution. SIAM/ASA Journal on Uncertainty Quantification, 8(2), 693-716.
-
 Huang, C., & Joseph, V. R. (2024). Factor Importance Ranking and Selection using Total Indices. arXiv preprint arXiv:2401.00800.
 
-Sobol', I. Y. M. (1990). On sensitivity estimation for nonlinear mathematical models. Matematicheskoe modelirovanie, 2(1), 112-118.
+Sobol', I. M. (2001). Global sensitivity indices for nonlinear mathematical models and their Monte Carlo estimates. Mathematics and computers in simulation, 55(1-3), 271-280.
+
+Broto, B., Bachoc, F., & Depecker, M. (2020). Variance reduction for estimation of Shapley effects and adaptation to unknown input distribution. SIAM/ASA Journal on Uncertainty Quantification, 8(2), 693-716.
 
 Vakayil, A., & Joseph, V. R. (2022). Data twinning. Statistical Analysis and Data Mining: The ASA Data Science Journal, 15(5), 598-610.
 }

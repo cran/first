@@ -7,33 +7,33 @@
 first(
   X,
   y,
-  n.knn = 2,
+  n.knn = NULL,
   n.mc = nrow(X),
-  mc.option = "random",
+  twin.mc = FALSE,
   rescale = TRUE,
-  sparse = FALSE,
+  n.forward = 2,
   parl = NULL,
   verbose = FALSE
 )
 }
 \arguments{
-\item{X}{a matrix or data frame containing the inputs.}
+\item{X}{a matrix or data frame for the factors / predictors.}
 
-\item{y}{a vector containing the outputs.}
+\item{y}{a vector for the responses.}
 
-\item{n.knn}{number of nearest-neighbors for the inner loop conditional variance estimation. See \code{\link{totalsobol.knn}} for details.}
+\item{n.knn}{number of nearest-neighbors for the inner loop conditional variance estimation. \code{n.knn=2} is recommended for regression, and \code{n.knn=3} for binary classification.}
 
-\item{n.mc}{number of Monte Carlo samples for the outer loop expectation estimation. See \code{\link{totalsobol.knn}} for details.}
+\item{n.mc}{number of Monte Carlo samples for the outer loop expectation estimation.}
 
-\item{mc.option}{option for the Monte Carlo samples. The options are random(default)/twinning. See \code{\link{totalsobol.knn}} for details.}
+\item{twin.mc}{a logical indicating whether to use twinning subsamples, otherwise random subsamples are used. It is supported when the reduction ratio is at least 2.}
 
-\item{rescale}{a logical indicating whether continuous inputs is rescaled to zero mean unit variance.}
+\item{rescale}{a logical logical indicating whether to standardize the factors / predictors.}
 
-\item{sparse}{a logical indicating whether to run the fast version of forward selection that integrates with the effect sparsity principle.}
+\item{n.forward}{number of times to run the forward selection phase to tradeoff between efficiency and accuracy. \code{n_forward=2} is recommended. To run the complete forward selection, please set \code{n_forward} to the number of factors / predictors.}
 
 \item{parl}{number of cores on which to parallelize the computation. If \code{NULL}, then no parallelization is done.}
 
-\item{verbose}{a logical indicating whether to display intermediate results of running \code{first}.}
+\item{verbose}{a logical indicating whether to display intermediate results.}
 }
 \value{
 A numeric vector of the factor importance, with zero indicating that the factor is not important to the prediction of the response.
@@ -47,11 +47,17 @@ For categorical data inputs, please convert them to factor type before calling t
 }
 \details{
 \code{first} provides factor importance ranking and selection directly from scattered data without any model fitting.
-Factor importance is based on total Sobol' indices (Sobol, 1993),
-and its connection to the approximation error introduced by excluding the factor of interest is shown in Huang and Joseph (2024).
-The estimation of the total Sobol' indices is carried out using \code{\link{totalsobol.knn}}.
+Factor importance is computed based on total Sobol' indices (Sobol', 2001),
+which is connected to the approximation error introduced by excluding the factor of interest (Huang and Joseph, 2024).
+The estimation procedure adapts from the Nearest-Neighbor estimator in Broto et al. (2020) to account for the noisy data.
 Integrating it with forward selection and backward elimination allows for factor selection.
-Please see Huang and Joseph (2024) for the details of the algorithm.
+
+\code{first} belongs to the class of forward-backward selection with early dropping algorithm (Borboudakis and Tsamardinos, 2019).
+In forward selection, each time we find the candidate that maximizes the output variance that can be explained.
+For candidates that cannot improve the variance explained conditional on the selected factors, they are removed from the candidate set.
+This forward selection step is run \code{n_forward} times to tradeoff between accuracy and efficiency. \code{n_forward=2} is recommended in Yu et al. (2020).
+To run the complete forward selection, please set \code{n_forward} to the number of factors / predictors.
+In backward elimination, we again remove one factor at a time, starting with the factor that can improve the explained variance most, till no factor can further improve.
 
 \code{n.knn=2} nearest-neighbors is recommended for integer/numeric output, and \code{n.knn=3} is suggested for binary output.
 For numeric inputs, it is recommended to standardize them via setting the argument \code{rescale=TRUE}.
@@ -59,12 +65,9 @@ Categorical inputs are transformed via one-hot encoding for the nearest-neighbor
 To speed up the nearest-neighbor search, k-d tree from the \pkg{FNN} package is used.
 Also, parallel computation is also supported via the \pkg{parallel} package.
 
-For very large dimensional problems, we also provide the fast forward selection method (\code{sparse=TRUE})
-that is based on the effect sparsity principle, but it sacrifices some accuracy.
-See Appendix of Huang and Joseph (2024) for more details.
 For large datasets, we support the use of subsamples for further acceleration.
 Use argument \code{n.mc} to specify the number of subsamples.
-Two options (argument \code{mc.option}) are available for finding the subsamples: random and twinning (Vakayil and Joseph, 2022).
+Two options are available for finding the subsamples: random and twinning (Vakayil and Joseph, 2022).
 Twinning is able to find subsamples that better represent the big data, i.e.,
 providing a more accurate estimation, but at a slightly higher computational cost.
 For more details, please see the \pkg{twinning} package.
@@ -87,7 +90,13 @@ print(round(imp,3)) # Only first 3 factors are important
 \references{
 Huang, C., & Joseph, V. R. (2024). Factor Importance Ranking and Selection using Total Indices. arXiv preprint arXiv:2401.00800.
 
-Sobol', I. Y. M. (1990). On sensitivity estimation for nonlinear mathematical models. Matematicheskoe modelirovanie, 2(1), 112-118.
+Sobol', I. M. (2001). Global sensitivity indices for nonlinear mathematical models and their Monte Carlo estimates. Mathematics and computers in simulation, 55(1-3), 271-280.
+
+Broto, B., Bachoc, F., & Depecker, M. (2020). Variance reduction for estimation of Shapley effects and adaptation to unknown input distribution. SIAM/ASA Journal on Uncertainty Quantification, 8(2), 693-716.
+
+Borboudakis, G., & Tsamardinos, I. (2019). Forward-backward selection with early dropping. The Journal of Machine Learning Research, 20(1), 276-314.
+
+Yu, K., Guo, X., Liu, L., Li, J., Wang, H., Ling, Z., & Wu, X. (2020). Causality-based feature selection: Methods and evaluations. ACM Computing Surveys (CSUR), 53(5), 1-36.
 
 Vakayil, A., & Joseph, V. R. (2022). Data twinning. Statistical Analysis and Data Mining: The ASA Data Science Journal, 15(5), 598-610.
 }

@@ -1,80 +1,89 @@
-twin.sample <- function(X, n) {
-  N <- nrow(X)
-  r <- floor(N/n)
-  if (r > 1) {
-    rind <- sample(1:N, (N-r*n))
-    kind <- setdiff(1:N, rind)
-    ind <- kind[twinning::twin(X[kind,,drop=FALSE],r)]
-  } else {
-    ind <- sample(1:N, n)
-  }
-  return (ind)
-}
-
 preproess.input <- function(X) {
   # one hot encoding of categorical features
   p <- ncol(X)
-  ind.cat <- which(sapply(X,class)=="factor")
-  if (length(ind.cat) > 0) {
-    ind.con <- setdiff(1:p, ind.cat)
-    X.tmp <- as.matrix(X[,ind.con,drop=FALSE])
-    for (i in 1:length(ind.cat)) {
-      # normalization to have unit euclidean distance in difference
-      ftr.tmp <- stats::model.matrix(~.-1,X[,ind.cat[i],drop=FALSE])
-      X.tmp <- cbind(X.tmp, ftr.tmp)
-    }
-    X <- X.tmp
-  } else {
-    X <- as.matrix(X,ncol=p)
-  }
-  
-  return (X)
+  cat.col.ind <- which(sapply(X,class)=="factor")
+  num.col.ind <- setdiff(1:p, cat.col.ind)
+  Xp <- as.matrix(X[,num.col.ind,drop=FALSE])
+  for (ci in cat.col.ind)
+    Xp <- cbind(Xp, stats::model.matrix(~.-1,X[,ci,drop=FALSE]))
+  Xp <- as.matrix(Xp, nrow=nrow(Xp))
+  return (Xp)
 }
 
-exp.var.knn <- function(X, y, subset, n.knn=2, n.mc=nrow(X), mc.option="random") {
-  # preprocess
-  if (is.logical(subset[1])) {
-    p <- ncol(X)
-    if (length(subset)==p) {
-      subset <- c(1:p)[subset]
+exp.var.knn <- function(
+    X, 
+    y, 
+    subset, 
+    duplicate = NULL,
+    n.knn = 2,
+    n.mc = nrow(X),
+    twin.mc = FALSE,
+    random.seed = NULL
+) {
+  
+  # check for random seed
+  if (!is.null(random.seed)) set.seed(random.seed)
+  
+  # arguments check for X and y
+  if(!(inherits(X, "matrix") | inherits(X, "data.frame")))
+    stop("X must be either a matrix or a data frame.")
+  if (inherits(X, "matrix")) 
+    X <- data.frame(X)
+  if (inherits(y, "matrix"))
+    y <- c(y) 
+  if (nrow(X) != length(y))
+    stop(sprintf("Size of X (%d) must match with size of y (%d)", nrow(X), length(y)))
+  n <- nrow(X)
+  p <- ncol(X)
+  
+  # argument check of using subsample
+  n.mc <- as.integer(n.mc)
+  n.mc <- if (n.mc > 0) min(n.mc, n) else n 
+  twin.mc <- if (n %/% n.mc < 2) FALSE else twin.mc
+  
+  # argument check for subset
+  if (length(subset) == 0) return (stats::var(y))
+  
+  # check if any row of X duplicate and preprocess categorical inputs
+  if (is.null(duplicate)) {
+    duplicate <- rep(FALSE, length(subset))
+    for (i in 1:length(subset)) duplicate[i] <- (length(unique(X[,subset[i]])) < n)
+  } else {
+    if (length(duplicate) != p)
+      stop(sprintf("Size of duplicate (%d) must be %d", length(duplicate), p))
+    duplicate <- duplicate[subset]
+  }
+  X <- X[,subset,drop=FALSE]
+  row.duplicated <- FALSE
+  if (all(duplicate)) {
+    if (length(subset) > 1) {
+      if (nrow(unique(X)) < n)
+        row.duplicated <- TRUE
     } else {
-      stop(sprintf("length of subset(TRUE/FALSE) is not %d", p))
+      row.duplicated <- TRUE
     }
   }
-  X <- preproess.input(X[,subset,drop=FALSE])
+  X <- preproess.input(X)
+  if (row.duplicated) {
+    # add a column for random jittering
+    X <- cbind(X, 1e-3*runif(n,min=-1,max=1))
+  }
   
-  # compute D.ind
-  if (n.mc < nrow(X)){
-    if (mc.option == "random"){
-      D.ind <- sample(1:nrow(X), n.mc)
-    } else if (mc.option == "twinning") {
-      D.ind <- twin.sample(X, n.mc)
+  # nearest-neighbor search and compute expected conditional variance
+  if (n.mc < n) {
+    if (twin.mc) {
+      r <- n %/% n.mc
+      keep.ind <- sample(1:n, n.mc*r)
+      twin.ind <- twinning::twin(data=X[keep.ind,,drop=F], r=r, u1=1)
+      query.ind <- keep.ind[twin.ind]
     } else {
-      stop(sprintf("no mc.option %s. It can either be random or twinning.", mc.option))
+      query.ind <- sample(1:n, n.mc, replace=FALSE)
     }
   } else {
-    D.ind <- c(1:nrow(X))
+    query.ind <- c(1:n)
   }
-  
-  # find the n.knn cloeset points
-  if (nrow(unique(X)) < nrow(X)) {
-    # compute exact distance
-    D <- X[D.ind,,drop=FALSE]
-    suppressWarnings(D.dist <- as.matrix(pdist::pdist(D,X)))
-    c.var <- numeric(length(D.ind))
-    for (i in 1:length(D.ind)){
-      d.dist <- D.dist[i,]
-      rad <- d.dist[order(d.dist)[n.knn]]
-      id.sort <- c(1:length(d.dist))[d.dist<=rad]
-      c.var[i] <- stats::var(y[id.sort])
-    }
-    ev <- mean(c.var)
-  } else {
-    # use fast knn
-    D <- X[D.ind,,drop=FALSE]
-    id.sort <- FNN::knnx.index(data=X, query=D, k=n.knn)
-    ev <- mean(apply(matrix(y[id.sort],ncol=n.knn),1,stats::var))
-  }
+  nn.index <- FNN::knnx.index(data=X, query=X[query.ind,], k=n.knn)
+  ev <- mean(apply(matrix(y[nn.index],ncol=n.knn),1,stats::var))
   
   return (ev)
 }
@@ -89,23 +98,22 @@ exp.var.knn <- function(X, y, subset, n.knn=2, n.mc=nrow(X), mc.option="random")
 #' For large datasets, we support the use of subsample to reduce the computational cost.
 #'   
 #' @importFrom FNN knnx.index
-#' @importFrom pdist pdist
 #' @importFrom parallel makeCluster clusterExport parSapply stopCluster
-#' @importFrom stats var model.matrix
+#' @importFrom stats var model.matrix runif
 #' @importFrom twinning twin
 #' 
-#' @param X a matrix or data frame containing the inputs.
-#' @param y a vector containing the outputs.
-#' @param noise a logical indicating whether the outputs are noisy. 
-#' @param n.knn number of nearest-neighbors for the inner loop conditional variance estimation.
+#' @param X a matrix or data frame for the factors / predictors.
+#' @param y a vector for the responses.
+#' @param noise a logical indicating whether the responses are noisy. 
+#' @param n.knn number of nearest-neighbors for the inner loop conditional variance estimation. \code{n.knn=2} is recommended for regression, and \code{n.knn=3} for binary classification.
 #' @param n.mc number of Monte Carlo samples for the outer loop expectation estimation.
-#' @param mc.option option for the Monte Carlo samples. The options are random(default)/twinning. See below for details.
-#' @param rescale a logical indicating whether continuous inputs is rescaled to zero mean unit variance.
+#' @param twin.mc a logical indicating whether to use twinning subsamples, otherwise random subsamples are used. It is supported when the reduction ratio is at least 2. 
+#' @param rescale a logical logical indicating whether to standardize the factors / predictors.
 #' @param parl number of cores on which to parallelize the computation. If \code{NULL}, then no parallelization is done.
 #' 
 #' @details  
 #' \code{totalsobol.knn} provides consistent estimation of the total Sobol' indices (Sobol, 1993) from scattered data.
-#' When the output is clean/noiseless (\code{noise=FALSE}), \code{totalsobol.knn} implements the nearest-neighbor estimator proposed in Broto et al. (2020).
+#' When the output is clean/noiseless (\code{noise=FALSE}), \code{totalsobol.knn} implements the Nearest-Neighbor estimator proposed in Broto et al. (2020).
 #' See \code{shapleysobol_knn} from the \pkg{sensitivity} package for another implementation of the nearest-neighbor estimator. 
 #' When the output is noisy (\code{noise=TRUE}), \code{totalsobol.knn} implements the Noise-Adjusted Nearest-Neighbor (NANNE) estimator (Huang and Joseph, 2024). 
 #' NANNE estimator can correct the estimation bias of the nearest-neighbor estimator caused by the random noise. 
@@ -120,7 +128,7 @@ exp.var.knn <- function(X, y, subset, n.knn=2, n.mc=nrow(X), mc.option="random")
 #' 
 #' Last, for large datasets, we support the use of subsamples for further acceleration.
 #' Use argument \code{n.mc} to specify the number of subsamples. 
-#' Two options (argument \code{mc.option}) are available for finding the subsamples: random and twinning (Vakayil and Joseph, 2022). 
+#' Two options are available for finding the subsamples: random and twinning (Vakayil and Joseph, 2022). 
 #' Twinning is able to find subsamples that better represent the big data, i.e., 
 #' providing a more accurate estimation, but at a slightly higher computational cost. 
 #' For more details, please see the \pkg{twinning} package.
@@ -132,11 +140,11 @@ exp.var.knn <- function(X, y, subset, n.knn=2, n.mc=nrow(X), mc.option="random")
 #' Chaofan Huang \email{chaofan.huang@@gatech.edu} and V. Roshan Joseph \email{roshan@@gatech.edu}
 #' 
 #' @references
-#' Broto, B., Bachoc, F., & Depecker, M. (2020). Variance reduction for estimation of Shapley effects and adaptation to unknown input distribution. SIAM/ASA Journal on Uncertainty Quantification, 8(2), 693-716. 
-#' 
 #' Huang, C., & Joseph, V. R. (2024). Factor Importance Ranking and Selection using Total Indices. arXiv preprint arXiv:2401.00800.
 #' 
-#' Sobol', I. Y. M. (1990). On sensitivity estimation for nonlinear mathematical models. Matematicheskoe modelirovanie, 2(1), 112-118.
+#' Sobol', I. M. (2001). Global sensitivity indices for nonlinear mathematical models and their Monte Carlo estimates. Mathematics and computers in simulation, 55(1-3), 271-280.
+#' 
+#' Broto, B., Bachoc, F., & Depecker, M. (2020). Variance reduction for estimation of Shapley effects and adaptation to unknown input distribution. SIAM/ASA Journal on Uncertainty Quantification, 8(2), 693-716.
 #' 
 #' Vakayil, A., & Joseph, V. R. (2022). Data twinning. Statistical Analysis and Data Mining: The ASA Data Science Journal, 15(5), 598-610.
 #' 
@@ -158,25 +166,40 @@ exp.var.knn <- function(X, y, subset, n.knn=2, n.mc=nrow(X), mc.option="random")
 #' print(round(tsi,3)) # Analytical Total Sobol' Indices: 0.558, 0.442, 0.244
 #' 
 
-totalsobol.knn <- function(X, y, noise=TRUE, n.knn=2, n.mc=nrow(X), mc.option="random", 
-                           rescale=TRUE, parl=NULL) {
-  # arguments check
+totalsobol.knn <- function(
+    X,
+    y,
+    noise,
+    n.knn = NULL,
+    n.mc = nrow(X),
+    twin.mc = FALSE,
+    rescale = TRUE, 
+    parl = NULL
+) {
+  
+  # arguments check for X and y
   if(!(inherits(X, "matrix") | inherits(X, "data.frame")))
     stop("X must be either a matrix of a data frame.")
-  if(n.mc <= 0) 
-    stop("n.mc must be a positive integer.")
-  
-  # preprocess
+  if (inherits(X, "matrix")) 
+    X <- data.frame(X)
+  if (inherits(y, "matrix"))
+    y <- c(y) 
+  if (nrow(X) != length(y))
+    stop(sprintf("Size of X (%d) must match with size of y (%d)", nrow(X), length(y)))
   n <- nrow(X)
   p <- ncol(X)
-  n.mc <- min(n.mc, n)
-  if (inherits(X, "matrix")) X <- data.frame(X)
-  # verify column type
-  col.class.error <- F
+  
+  # argument check of using subsample
+  n.mc <- as.integer(n.mc)
+  n.mc <- if (n.mc > 0) min(n.mc, n) else n 
+  twin.mc <- if (n %/% n.mc < 2) FALSE else twin.mc
+  
+  # preprocess for features
+  col.class.error <- FALSE
   col.class.error.msg <- "\n"
   col.class <- sapply(X,class)
   for (i in 1:p) {
-    if (!(col.class[i] %in% c("integer","numeric","factor"))) {
+    if (!(col.class[i] %in% c("logical","integer","numeric","factor"))) {
       col.class.error.msg <- paste(
         col.class.error.msg, 
         sprintf("Column %d (%s) is type %s.\n", i, colnames(X)[i], col.class[i]),
@@ -187,111 +210,83 @@ totalsobol.knn <- function(X, y, noise=TRUE, n.knn=2, n.mc=nrow(X), mc.option="r
   if (col.class.error) {
     col.class.error.msg <- paste(
       col.class.error.msg, 
-      "Please convert above columns to the supported column types (integer/numeric/factor).\n",
+      "Please convert above columns to the supported column types (logical/integer/numeric/factor).\n",
       sep="")
     stop(col.class.error.msg)
   }
-  # rescale continuous inputs 
+  # find if any column has duplicate value
+  duplicate <- rep(FALSE, p)
+  for (i in 1:p) duplicate[i] <- (length(unique(X[,i])) < n)
+  # rescale logical and continuous inputs
   if (rescale) {
     for (i in 1:p) {
-      if (col.class[i]=="numeric")
+      if (col.class[i]=="logical")
+        X[,i] <- 2 * (X[,i] - 0.5)
+      if (col.class[i] %in% c("integer","numeric"))
         X[,i] <- c(scale(X[,i]))
     }
   }
-  y <- c(y)
   
-  # compute the variance for the noise
-  noise.var <- if(noise) exp.var.knn(X=X,y=y,subset=rep(TRUE,p),n.knn=n.knn,n.mc=n.mc,mc.option=mc.option) else 0
-  y.var <- pmax(stats::var(y)-noise.var, 0)
-  if (y.var==0) return (rep(0,p))
-  if (p==1) return (c(1))
-  
-  # compute total sobol' indices, with last term being the noise
-  indices <- (diag(p)==0)
-  if (!is.null(parl)) {
-    clus <- parallel::makeCluster(parl)
-    parallel::clusterExport(clus, list("exp.var.knn","preproess.input"))
-    tsi <- parallel::parApply(clus, indices, 1, 
-                              function(ss) exp.var.knn(X=X,y=y,subset=ss,n.knn=n.knn,n.mc=n.mc,mc.option=mc.option))
-    parallel::stopCluster(clus)
-  } else {
-    tsi <- apply(indices, 1, function(ss) exp.var.knn(X=X,y=y,subset=ss,n.knn=n.knn,n.mc=n.mc,mc.option=mc.option))
+  # argument check for n.knn
+  if (length(unique(y)) == 1) 
+    stop("y must have more than one unique value.")
+  if (is.null(n.knn)) {
+    if (length(unique(y)) > 2) {
+      n.knn <- 2
+    } else {
+      n.knn <- 3
+    }
   }
-  tsi <- pmax(tsi-noise.var, 0) / y.var
+  
+  # compute total Sobol' indices
+  if (noise) {
+    noise.var <- exp.var.knn(
+      X = X,
+      y = y,
+      subset = c(1:p), 
+      duplicate = duplicate,
+      n.knn = n.knn, 
+      n.mc = n.mc,
+      twin.mc = twin.mc
+    )
+  } else {
+    noise.var <- 0
+  }
+  y.var <- max(stats::var(y) - noise.var, 0)
+  if (y.var == 0) {
+    tsi <- rep(0, p)
+  } else {
+    if (is.null(parl)) {
+      xe.var <- sapply(1:p, function(i) exp.var.knn(
+        X = X,
+        y = y,
+        subset = setdiff(1:p, i),
+        n.knn = n.knn, 
+        duplicate = duplicate,
+        n.mc = n.mc,
+        twin.mc = twin.mc
+      ))
+    } else {
+      seeds <- sample(1:1e9, p)
+      clus <- parallel::makeCluster(parl)
+      parallel::clusterExport(clus, list("preproess.input","exp.var.knn"), envir=environment())
+      xe.var <- parallel::parSapply(clus, 1:p, function(i) exp.var.knn(
+        X = X,
+        y = y,
+        subset = setdiff(1:p, i),
+        n.knn = n.knn, 
+        duplicate = duplicate,
+        n.mc = n.mc,
+        twin.mc = twin.mc,
+        random.seed = seeds[i]
+      ))
+      parallel::stopCluster(clus)
+    }
+    xe.var <- pmax(xe.var - noise.var, 0)
+    tsi <- xe.var / y.var
+  }
   
   return (tsi)
-}
-
-#' @title NANNE estimator with Backward Elimination
-#' @importFrom FNN knnx.index
-#' @importFrom pdist pdist
-#' @importFrom parallel makeCluster clusterExport parSapply stopCluster
-#' @importFrom stats var model.matrix
-#' @importFrom twinning twin
-#' @noRd
-nanne.be <- function(X, y, n.knn=2, n.mc=nrow(X), mc.option="random", 
-                     rescale=TRUE, parl=NULL, verbose=FALSE) {
-  # arguments check
-  if(!(inherits(X, "matrix") | inherits(X, "data.frame")))
-    stop("X must be either a matrix of a data frame.")
-  if(n.mc <= 0) 
-    stop("n.mc must be a positive integer.")
-  
-  # preprocess
-  n <- nrow(X)
-  p <- ncol(X)
-  n.mc <- min(n.mc, n)
-  if (inherits(X, "matrix")) X <- data.frame(X)
-  # verify column type
-  col.class.error <- FALSE
-  col.class.error.msg <- "\n"
-  col.class <- sapply(X,class)
-  for (i in 1:p) {
-    if (!(col.class[i] %in% c("integer","numeric","factor"))) {
-      col.class.error.msg <- paste(
-        col.class.error.msg, 
-        sprintf("Column %d (%s) is type %s.\n", i, colnames(X)[i], col.class[i]),
-        sep="")
-      col.class.error <- TRUE
-    }
-  }
-  if (col.class.error) {
-    col.class.error.msg <- paste(
-      col.class.error.msg, 
-      "Please convert above columns to the supported column types (integer/numeric/factor).\n",
-      sep="")
-    stop(col.class.error.msg)
-  }
-  # rescale continuous inputs 
-  if (rescale) {
-    for (i in 1:p) {
-      if (col.class[i]=="numeric")
-        X[,i] <- c(scale(X[,i]))
-    }
-  }
-  y <- c(y)
-  
-  # iterate until convergence
-  subset <- c(1:p)
-  while (TRUE) {
-    subset.old <- subset
-    subset.imp <- totalsobol.knn(X[,subset,drop=FALSE],y,noise=TRUE,
-                                 n.knn=n.knn,n.mc=n.mc,mc.option=mc.option,
-                                 rescale=FALSE,parl=parl)
-    if (verbose) {
-      print(noquote(paste(c("Subset:",subset), collapse=" ")))
-      print(noquote(paste(c("Total Sobol' Indices:",round(subset.imp,3)), collapse=" ")))
-    }
-    subset <- subset[subset.imp>0]
-    subset.imp <- subset.imp[subset.imp>0]
-    
-    if (length(subset)==0) break
-    if (length(subset.old)==length(subset)) break
-  }
-  
-  imp <- rep(0,p)
-  if (length(subset)>0) imp[subset] <- subset.imp
-  return (imp)
 }
 
 #' @title 
@@ -305,28 +300,33 @@ nanne.be <- function(X, y, n.knn=2, n.mc=nrow(X), mc.option="random",
 #' For categorical data inputs, please convert them to factor type before calling the function.
 #' 
 #' @importFrom FNN knnx.index
-#' @importFrom pdist pdist
 #' @importFrom parallel makeCluster clusterExport parSapply stopCluster
-#' @importFrom stats var model.matrix
+#' @importFrom stats var model.matrix runif
 #' @importFrom twinning twin
 #' 
-#' @param X a matrix or data frame containing the inputs.
-#' @param y a vector containing the outputs.
-#' @param n.knn number of nearest-neighbors for the inner loop conditional variance estimation. See \code{\link{totalsobol.knn}} for details.
-#' @param n.mc number of Monte Carlo samples for the outer loop expectation estimation. See \code{\link{totalsobol.knn}} for details.
-#' @param mc.option option for the Monte Carlo samples. The options are random(default)/twinning. See \code{\link{totalsobol.knn}} for details.
-#' @param rescale a logical indicating whether continuous inputs is rescaled to zero mean unit variance.
-#' @param sparse a logical indicating whether to run the fast version of forward selection that integrates with the effect sparsity principle.
+#' @param X a matrix or data frame for the factors / predictors.
+#' @param y a vector for the responses.
+#' @param n.knn number of nearest-neighbors for the inner loop conditional variance estimation. \code{n.knn=2} is recommended for regression, and \code{n.knn=3} for binary classification.
+#' @param n.mc number of Monte Carlo samples for the outer loop expectation estimation. 
+#' @param twin.mc a logical indicating whether to use twinning subsamples, otherwise random subsamples are used. It is supported when the reduction ratio is at least 2. 
+#' @param rescale a logical logical indicating whether to standardize the factors / predictors.
+#' @param n.forward number of times to run the forward selection phase to tradeoff between efficiency and accuracy. \code{n_forward=2} is recommended. To run the complete forward selection, please set \code{n_forward} to the number of factors / predictors. 
 #' @param parl number of cores on which to parallelize the computation. If \code{NULL}, then no parallelization is done.
-#' @param verbose a logical indicating whether to display intermediate results of running \code{first}.
+#' @param verbose a logical indicating whether to display intermediate results.
 #' 
 #' @details
 #' \code{first} provides factor importance ranking and selection directly from scattered data without any model fitting. 
-#' Factor importance is based on total Sobol' indices (Sobol, 1993), 
-#' and its connection to the approximation error introduced by excluding the factor of interest is shown in Huang and Joseph (2024).
-#' The estimation of the total Sobol' indices is carried out using \code{\link{totalsobol.knn}}. 
-#' Integrating it with forward selection and backward elimination allows for factor selection.     
-#' Please see Huang and Joseph (2024) for the details of the algorithm. 
+#' Factor importance is computed based on total Sobol' indices (Sobol', 2001), 
+#' which is connected to the approximation error introduced by excluding the factor of interest (Huang and Joseph, 2024). 
+#' The estimation procedure adapts from the Nearest-Neighbor estimator in Broto et al. (2020) to account for the noisy data. 
+#' Integrating it with forward selection and backward elimination allows for factor selection.
+#' 
+#' \code{first} belongs to the class of forward-backward selection with early dropping algorithm (Borboudakis and Tsamardinos, 2019). 
+#' In forward selection, each time we find the candidate that maximizes the output variance that can be explained. 
+#' For candidates that cannot improve the variance explained conditional on the selected factors, they are removed from the candidate set. 
+#' This forward selection step is run `n_forward` times to tradeoff between accuracy and efficiency. \code{n_forward=2} is recommended in Yu et al. (2020). 
+#' To run the complete forward selection, please set `n_forward` to the number of factors / predictors. 
+#' In backward elimination, we again remove one factor at a time, starting with the factor that can improve the explained variance most, till no factor can further improve. 
 #' 
 #' \code{n.knn=2} nearest-neighbors is recommended for integer/numeric output, and \code{n.knn=3} is suggested for binary output.
 #' For numeric inputs, it is recommended to standardize them via setting the argument \code{rescale=TRUE}.
@@ -334,12 +334,9 @@ nanne.be <- function(X, y, n.knn=2, n.mc=nrow(X), mc.option="random",
 #' To speed up the nearest-neighbor search, k-d tree from the \pkg{FNN} package is used. 
 #' Also, parallel computation is also supported via the \pkg{parallel} package.
 #' 
-#' For very large dimensional problems, we also provide the fast forward selection method (\code{sparse=TRUE}) 
-#' that is based on the effect sparsity principle, but it sacrifices some accuracy.
-#' See Appendix of Huang and Joseph (2024) for more details. 
 #' For large datasets, we support the use of subsamples for further acceleration.
 #' Use argument \code{n.mc} to specify the number of subsamples. 
-#' Two options (argument \code{mc.option}) are available for finding the subsamples: random and twinning (Vakayil and Joseph, 2022). 
+#' Two options are available for finding the subsamples: random and twinning (Vakayil and Joseph, 2022). 
 #' Twinning is able to find subsamples that better represent the big data, i.e., 
 #' providing a more accurate estimation, but at a slightly higher computational cost. 
 #' For more details, please see the \pkg{twinning} package.
@@ -353,7 +350,13 @@ nanne.be <- function(X, y, n.knn=2, n.mc=nrow(X), mc.option="random",
 #' @references
 #' Huang, C., & Joseph, V. R. (2024). Factor Importance Ranking and Selection using Total Indices. arXiv preprint arXiv:2401.00800.
 #' 
-#' Sobol', I. Y. M. (1990). On sensitivity estimation for nonlinear mathematical models. Matematicheskoe modelirovanie, 2(1), 112-118.
+#' Sobol', I. M. (2001). Global sensitivity indices for nonlinear mathematical models and their Monte Carlo estimates. Mathematics and computers in simulation, 55(1-3), 271-280.
+#' 
+#' Broto, B., Bachoc, F., & Depecker, M. (2020). Variance reduction for estimation of Shapley effects and adaptation to unknown input distribution. SIAM/ASA Journal on Uncertainty Quantification, 8(2), 693-716.
+#' 
+#' Borboudakis, G., & Tsamardinos, I. (2019). Forward-backward selection with early dropping. The Journal of Machine Learning Research, 20(1), 276-314.
+#' 
+#' Yu, K., Guo, X., Liu, L., Li, J., Wang, H., Ling, Z., & Wu, X. (2020). Causality-based feature selection: Methods and evaluations. ACM Computing Surveys (CSUR), 53(5), 1-36.
 #' 
 #' Vakayil, A., & Joseph, V. R. (2022). Data twinning. Statistical Analysis and Data Mining: The ASA Data Science Journal, 15(5), 598-610.
 #' 
@@ -375,96 +378,198 @@ nanne.be <- function(X, y, n.knn=2, n.mc=nrow(X), mc.option="random",
 #' print(round(imp,3)) # Only first 3 factors are important
 #' 
 
-first <- function(X, y, n.knn=2, n.mc=nrow(X), mc.option="random", 
-                  rescale=TRUE, sparse=FALSE, parl=NULL, verbose=FALSE) {
-  # arguments check
+first <- function(
+    X,
+    y,
+    n.knn = NULL,
+    n.mc = nrow(X),
+    twin.mc = FALSE,
+    rescale = TRUE,
+    n.forward = 2,
+    parl = NULL,
+    verbose = FALSE
+) {
+  
+  # arguments check for X and y
   if(!(inherits(X, "matrix") | inherits(X, "data.frame")))
     stop("X must be either a matrix of a data frame.")
-  if(n.mc <= 0) 
-    stop("n.mc must be a positive integer.")
-  
-  # preprocess
+  if (inherits(X, "matrix")) 
+    X <- data.frame(X)
+  if (inherits(y, "matrix"))
+    y <- c(y) 
+  if (nrow(X) != length(y))
+    stop(sprintf("Size of X (%d) must match with size of y (%d)", nrow(X), length(y)))
   n <- nrow(X)
   p <- ncol(X)
-  n.mc <- min(n.mc, n)
-  if (inherits(X, "matrix")) X <- data.frame(X)
-  # verify column type
+  
+  # argument check of using subsample
+  n.mc <- as.integer(n.mc)
+  n.mc <- if (n.mc > 0) min(n.mc, n) else n 
+  twin.mc <- if (n %/% n.mc < 2) FALSE else twin.mc
+  
+  # preprocess for features
   col.class.error <- FALSE
   col.class.error.msg <- "\n"
   col.class <- sapply(X,class)
   for (i in 1:p) {
-    if (!(col.class[i] %in% c("integer","numeric","factor"))) {
+    if (!(col.class[i] %in% c("logical","integer","numeric","factor"))) {
       col.class.error.msg <- paste(
         col.class.error.msg, 
         sprintf("Column %d (%s) is type %s.\n", i, colnames(X)[i], col.class[i]),
         sep="")
-      col.class.error <- TRUE
+      col.class.error <- T
     }
   }
   if (col.class.error) {
     col.class.error.msg <- paste(
       col.class.error.msg, 
-      "Please convert above columns to the supported column types (integer/numeric/factor).\n",
+      "Please convert above columns to the supported column types (logical/integer/numeric/factor).\n",
       sep="")
     stop(col.class.error.msg)
   }
-  # rescale continuous inputs 
+  # find if any column has duplicate value
+  duplicate <- rep(FALSE, p)
+  for (i in 1:p) duplicate[i] <- (length(unique(X[,i])) < n)
+  # rescale logical and continuous inputs
   if (rescale) {
     for (i in 1:p) {
-      if (col.class[i]=="numeric")
+      if (col.class[i]=="logical")
+        X[,i] <- 2 * (X[,i] - 0.5)
+      if (col.class[i] %in% c("integer","numeric"))
         X[,i] <- c(scale(X[,i]))
     }
   }
-  y <- c(y)
   
-  # iterate forward selection
-  if (verbose) print(noquote("Starting forward selection..."))
+  # argument check for n.knn
+  if (length(unique(y)) == 1) 
+    stop("y must have more than one unique value.")
+  if (is.null(n.knn)) {
+    if (length(unique(y)) > 2) {
+      n.knn <- 2
+      if (verbose) print("y has more than 2 unique values, setting it to regression problem with suggested n.knn = 2.")
+    } else {
+      n.knn <- 3
+      if (verbose) print("y has only 2 unique values, setting it to binary classification problem with suggested n.knn = 3.")
+    }
+  }
+  
+  # forward selection 
+  if (verbose) print("Starting forward selection...")
   y.var <- stats::var(y)
   subset <- c()
-  candidate <- c(1:p)
-  x.isi.max <- 0
-  while (TRUE) {
-    if (length(candidate)==0) break
-    # compute total sobol' index for noise
-    if (!is.null(parl)) {
-      clus <- parallel::makeCluster(parl)
-      parallel::clusterExport(clus, list("exp.var.knn","preproess.input"))
-      e.tsi <- parallel::parSapply(clus, candidate, function(i) {
-        exp.var.knn(X=X,y=y,subset=c(subset,i),n.knn=n.knn,n.mc=n.mc,mc.option=mc.option)
-      })
-      parallel::stopCluster(clus)
+  x.var.max <- 0
+  for (l in 1:n.forward) {
+    if (verbose) print(sprintf("Phase-%d forward selection...", l))
+    none.added.to.subset <- TRUE
+    candidate <- setdiff(1:p, subset)
+    while (length(candidate) > 0) {
+      # compute total Sobol' effect for -x (x for current subset)
+      if (is.null(parl)) {
+        nx.var <- sapply(candidate, function(i) exp.var.knn(
+          X = X,
+          y = y,
+          subset = c(subset,i),
+          duplicate = duplicate,
+          n.knn = n.knn, 
+          n.mc = n.mc,
+          twin.mc = twin.mc
+        ))
+      } else {
+        seeds <- sample(1:1e9, p)
+        clus <- parallel::makeCluster(parl)
+        parallel::clusterExport(clus, list("preproess.input","exp.var.knn"), envir=environment())
+        nx.var <- parallel::parSapply(clus, candidate, function(i) exp.var.knn(
+          X = X,
+          y = y,
+          subset = c(subset,i),
+          duplicate = duplicate,
+          n.knn = n.knn, 
+          n.mc = n.mc,
+          twin.mc = twin.mc,
+          random.seed = seeds[i]
+        ))
+        parallel::stopCluster(clus)
+      }
+      x.var <- pmax(y.var - nx.var, 0)
+      if (verbose) {
+        print(paste(c("current selection:", subset), collapse=" "))
+        print(sprintf("current variance explained: %.3f", x.var.max))
+        print(paste(c("candidate to add:", paste(paste(candidate,round(x.var,3),sep="("),")",sep="")), collapse=" "))
+      }
+      if (max(x.var) > x.var.max) {
+        # find the index to add such that the variance explained is maximized
+        add.ind <- candidate[which.max(x.var)]
+        candidate <- candidate[x.var > x.var.max]
+        candidate <- setdiff(candidate, add.ind)
+        subset <- c(subset, add.ind)
+        none.added.to.subset <- FALSE
+        x.var.max <- max(x.var)
+        if (verbose) print(sprintf("add candidate %d (%.3f).", add.ind, x.var.max))
+      } else {
+        break
+      }
+    }
+    if (none.added.to.subset) {
+      if (verbose) print("early termination since none of the candidates can be added in this phase. ")
+      break
+    }
+  }
+  
+  # backward elimination 
+  if (verbose) print("Starting backward elimination...")
+  subset <- sort(subset)
+  while (length(subset) > 0) {
+    # compute total sobol' effect for -(x/{i}) (x for current subset)
+    if (is.null(parl)) {
+      nx.var <- sapply(subset, function(i) exp.var.knn(
+        X = X,
+        y = y,
+        subset = setdiff(subset, i),
+        duplicate = duplicate,
+        n.knn = n.knn, 
+        n.mc = n.mc,
+        twin.mc = twin.mc
+      ))
     } else {
-      e.tsi <- sapply(candidate, function(i) {
-        exp.var.knn(X=X,y=y,subset=c(subset,i),n.knn=n.knn,n.mc=n.mc,mc.option=mc.option)
-      })
+      seeds <- sample(1:1e9, p)
+      clus <- parallel::makeCluster(parl)
+      parallel::clusterExport(clus, list("preproess.input","exp.var.knn"), envir=environment())
+      nx.var <- parallel::parSapply(clus, subset, function(i) exp.var.knn(
+        X = X,
+        y = y,
+        subset = setdiff(subset, i),
+        duplicate = duplicate,
+        n.knn = n.knn, 
+        n.mc = n.mc,
+        twin.mc = twin.mc,
+        random.seed = seeds[i]
+      ))
+      parallel::stopCluster(clus)
     }
-    # compute inclusive sobol' index x in the model
-    x.isi <- pmax(y.var-e.tsi, 0)
+    x.var <- pmax(y.var - nx.var, 0)
     if (verbose) {
-      print(noquote(paste(c("Candidate:",candidate), collapse=" ")))
-      print(noquote(paste(c("Variance Explained:",round(x.isi,3)), collapse=" ")))
+      print(paste(c("current selection:", subset), collapse=" "))
+      print(sprintf("current variance explained: %.3f", x.var.max))
+      print(paste(c("candidate to remove:", paste(paste(subset,round(x.var,3),sep="("),")",sep="")), collapse=" "))
     }
-    if (max(x.isi) > x.isi.max) {
-      # find the one that maximize the inclusive total sobol' index
-      max.ind <- candidate[which.max(x.isi)]
-      subset <- c(subset, max.ind)
-      if(sparse) candidate <- candidate[x.isi>x.isi.max]
-      candidate <- setdiff(candidate, max.ind)
-      x.isi.max <- max(x.isi)
+    if (max(x.var) > x.var.max) {
+      # find the index to remove such that the variance explained is maximized
+      remove.ind <- subset[which.max(x.var)]
+      subset <- setdiff(subset, remove.ind)
+      x.var.max <- max(x.var)
+      if (verbose) print(sprintf("remove candidate %d (%.3f).", remove.ind, x.var.max))
     } else {
       break
     }
   }
   
-  imp <- rep(0,p)
-  if (length(subset)==1) imp[subset] <- 1
-  if (length(subset)>1) {
-    # backward elimination
-    if (verbose) print(noquote("Starting backward elimination..."))
-    subset.imp <- nanne.be(X=X[,subset,drop=FALSE],y=y,n.knn=n.knn,n.mc=n.mc,mc.option=mc.option,
-                           rescale=FALSE,parl=parl,verbose=verbose)
-    imp[subset] <- subset.imp
+  # compute importance via total Sobol' indices
+  imp <- rep(0, p)
+  if (length(subset) > 0) {
+    noise.var <- y.var - x.var.max
+    imp[subset] <- (nx.var - noise.var) / x.var.max
   }
   
   return (imp)
+  
 }
