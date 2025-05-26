@@ -12,6 +12,7 @@ first(
   twin.mc = FALSE,
   rescale = TRUE,
   n.forward = 2,
+  importance = "total",
   parl = NULL,
   verbose = FALSE
 )
@@ -31,6 +32,8 @@ first(
 
 \item{n.forward}{number of times to run the forward selection phase to tradeoff between efficiency and accuracy. \code{n_forward=2} is recommended. To run the complete forward selection, please set \code{n_forward} to the number of factors / predictors.}
 
+\item{importance}{the options for the importance of \code{FIRST}. Default is \code{total}, which return a numeric vector for total Sobol' effect, and the other option is \code{shapley}, which return a numeric vector for Shapley Sobol' effect. See Huang and Joseph (2025) for details.}
+
 \item{parl}{number of cores on which to parallelize the computation. If \code{NULL}, then no parallelization is done.}
 
 \item{verbose}{a logical indicating whether to display intermediate results.}
@@ -39,20 +42,14 @@ first(
 A numeric vector of the factor importance, with zero indicating that the factor is not important to the prediction of the response.
 }
 \description{
-\code{first} implements the \emph{\strong{model-independent}} factor importance and selection procedure proposed in Huang and Joseph (2024).
-The importance measure is based on total Sobol' indices from global sensitivity analysis.
+\code{first} implements the \emph{\strong{model-independent}} factor importance and selection procedure proposed in Huang and Joseph (2025).
+The importance measure is based on Sobol' indices from global sensitivity analysis.
 Factor importance computation and selection are performed directly from the noisy data.
 Parallel computations are available to accelerate the estimation.
 For categorical data inputs, please convert them to factor type before calling the function.
 }
 \details{
-\code{first} provides factor importance ranking and selection directly from scattered data without any model fitting.
-Factor importance is computed based on total Sobol' indices (Sobol', 2001),
-which is connected to the approximation error introduced by excluding the factor of interest (Huang and Joseph, 2024).
-The estimation procedure adapts from the Nearest-Neighbor estimator in Broto et al. (2020) to account for the noisy data.
-Integrating it with forward selection and backward elimination allows for factor selection.
-
-\code{first} belongs to the class of forward-backward selection with early dropping algorithm (Borboudakis and Tsamardinos, 2019).
+\code{first} provides factor importance ranking and selection directly from scattered data without any model fitting. It belongs to the class of forward-backward selection with early dropping algorithm (Borboudakis and Tsamardinos, 2019).
 In forward selection, each time we find the candidate that maximizes the output variance that can be explained.
 For candidates that cannot improve the variance explained conditional on the selected factors, they are removed from the candidate set.
 This forward selection step is run \code{n_forward} times to tradeoff between accuracy and efficiency. \code{n_forward=2} is recommended in Yu et al. (2020).
@@ -88,7 +85,7 @@ print(round(imp,3)) # Only first 3 factors are important
 
 }
 \references{
-Huang, C., & Joseph, V. R. (2024). Factor Importance Ranking and Selection using Total Indices. arXiv preprint arXiv:2401.00800.
+Huang, C., & Joseph, V. R. (2025). Factor Importance Ranking and Selection using Total Indices. Technometrics.
 
 Sobol', I. M. (2001). Global sensitivity indices for nonlinear mathematical models and their Monte Carlo estimates. Mathematics and computers in simulation, 55(1-3), 271-280.
 

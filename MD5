@@ -1,5 +1,6 @@
-3b1cc62d44c18555cb947582a9d33b88 *DESCRIPTION
-a727dab648011d6583709e38335cb9d2 *NAMESPACE
-79c301d0f1052d579cb558ee0effe04e *R/first.R
-f7732e032e396ce6353be4b378baa9c7 *man/first.Rd
-b29bf8aac6bfcb84bcf9f66c449f2f23 *man/totalsobol.knn.Rd
+b2d675d603d6a503642049638a7b5054 *DESCRIPTION
+eae4c2f597aa06cffa37c108a024bb90 *NAMESPACE
+ded85b4cb732f878c46c03972b3db312 *R/first.R
+2df2b663bb4c69588910c14c2faa6faf *man/first.Rd
+0f1ac9a1fb87adbf0a06e26c16e206f6 *man/shapleysobol.knn.Rd
+049630f27f54a28e68080d6793cc57d3 *man/totalsobol.knn.Rd
