@@ -1,6 +1,7 @@
-b2d675d603d6a503642049638a7b5054 *DESCRIPTION
-eae4c2f597aa06cffa37c108a024bb90 *NAMESPACE
-ded85b4cb732f878c46c03972b3db312 *R/first.R
+76558a1a432259c7e6c1734de38f1f0b *DESCRIPTION
+111ffff6c41ddb0d3f9a85114ff69557 *NAMESPACE
+ebf73825a52d6321af47e405ae5ad249 *R/first.R
 2df2b663bb4c69588910c14c2faa6faf *man/first.Rd
+bf1bfdc4b287ce799db2044b6f67909a *man/first.rank.Rd
 0f1ac9a1fb87adbf0a06e26c16e206f6 *man/shapleysobol.knn.Rd
 049630f27f54a28e68080d6793cc57d3 *man/totalsobol.knn.Rd

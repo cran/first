@@ -515,6 +515,225 @@ shapleysobol.knn <- function(
   return (ssi)
 }
 
+#' @title
+#' Factor Ranking via Cumulative Variance that can be explained. 
+#' 
+#' @description 
+#' \code{first.tank} implements FIRST-RANK algorithm in Huang and Joseph (2025).
+#' Parallel computation is available to accelerate the estimation.  
+#' For categorical inputs, please convert them to factor before calling this function. 
+#' For large datasets, we support the use of subsample to reduce the computational cost.
+#'   
+#' @importFrom FNN knnx.index
+#' @importFrom parallel makeCluster clusterExport parSapply stopCluster
+#' @importFrom stats var model.matrix runif
+#' @importFrom twinning twin
+#' 
+#' @param X a matrix or data frame for the factors / predictors.
+#' @param y a vector for the responses.
+#' @param noise a logical indicating whether the responses are noisy. 
+#' @param n.knn number of nearest-neighbors for the inner loop conditional variance estimation. \code{n.knn=2} is recommended for regression, and \code{n.knn=3} for binary classification.
+#' @param n.mc number of Monte Carlo samples for the outer loop expectation estimation.
+#' @param twin.mc a logical indicating whether to use twinning subsamples, otherwise random subsamples are used. It is supported when the reduction ratio is at least 2. 
+#' @param rescale a logical logical indicating whether to standardize the factors / predictors.
+#' @param parl number of cores on which to parallelize the computation. If \code{NULL}, then no parallelization is done.
+#' 
+#' @details  
+#' \code{first.rank} provdes factor ranking directly from scattered data via cumulative variance that can be explained.
+#' Please see Huang and Joseph (2025) for a more detailed discussion and comparison. 
+#' 
+#' For integer/numeric output, \code{n.knn=2} nearest-neighbors is recommended for the noisy data (Huang and Joseph, 2025),
+#' and \code{n.knn=3} nearest-neighbors is suggested for the clean/noiseless data (Broto et al., 2020). 
+#' For numeric inputs, it is recommended to standardize them via setting the argument \code{rescale=TRUE}.
+#' Categorical inputs are transformed via one-hot encoding for the nearest-neighbor search. 
+#' To speed up the nearest-neighbor search, k-d tree from the \pkg{FNN} package is used. 
+#' Also, parallel computation is also supported via the \pkg{parallel} package.
+#' 
+#' Last, for large datasets, we support the use of subsamples for further acceleration.
+#' Use argument \code{n.mc} to specify the number of subsamples. 
+#' Two options are available for finding the subsamples: random and twinning (Vakayil and Joseph, 2022). 
+#' Twinning is able to find subsamples that better represent the big data, i.e., 
+#' providing a more accurate estimation, but at a slightly higher computational cost. 
+#' For more details, please see the \pkg{twinning} package.
+#' 
+#' @return 
+#' \item{ranking}{Indices of the factors, ordered from most to least importance}
+#' \item{explained.variance}{Cumulative variance explained by the factors in the ranking order}
+#' 
+#' @author 
+#' Chaofan Huang \email{chaofan.huang@@gatech.edu} and V. Roshan Joseph \email{roshan@@gatech.edu}
+#' 
+#' @references
+#' Huang, C., & Joseph, V. R. (2025). Factor Importance Ranking and Selection using Total Indices. Technometrics.
+#' 
+#' Sobol', I. M. (2001). Global sensitivity indices for nonlinear mathematical models and their Monte Carlo estimates. Mathematics and computers in simulation, 55(1-3), 271-280.
+#' 
+#' Broto, B., Bachoc, F., & Depecker, M. (2020). Variance reduction for estimation of Shapley effects and adaptation to unknown input distribution. SIAM/ASA Journal on Uncertainty Quantification, 8(2), 693-716.
+#' 
+#' Vakayil, A., & Joseph, V. R. (2022). Data twinning. Statistical Analysis and Data Mining: The ASA Data Science Journal, 15(5), 598-610.
+#' 
+#' @export
+#' 
+#' @examples
+#' ishigami <- function(x) {
+#'   x <- -pi + 2*pi*x
+#'   y <- sin(x[1]) + 7*sin(x[2])^2 + 0.1*x[3]^4*sin(x[1])
+#'   return (y)
+#' }
+#' 
+#' set.seed(123)
+#' n <- 10000
+#' p <- 3
+#' X <- matrix(runif(n*p), ncol=p)
+#' y <- apply(X,1,ishigami) + rnorm(n)
+#' res <- first.rank(X, y, noise=TRUE, n.knn=2, rescale=FALSE)
+#' res
+#' 
+
+first.rank <- function(
+    X,
+    y,
+    noise,
+    n.knn = NULL,
+    n.mc = nrow(X),
+    twin.mc = FALSE,
+    rescale = TRUE, 
+    parl = NULL
+) {
+  
+  # arguments check for X and y
+  if(!(inherits(X, "matrix") | inherits(X, "data.frame")))
+    stop("X must be either a matrix of a data frame.")
+  if (inherits(X, "matrix")) 
+    X <- data.frame(X)
+  if (inherits(y, "matrix"))
+    y <- c(y) 
+  if (nrow(X) != length(y))
+    stop(sprintf("Size of X (%d) must match with size of y (%d)", nrow(X), length(y)))
+  n <- nrow(X)
+  p <- ncol(X)
+  
+  # argument check of using subsample
+  n.mc <- as.integer(n.mc)
+  n.mc <- if (n.mc > 0) min(n.mc, n) else n 
+  twin.mc <- if (n %/% n.mc < 2) FALSE else twin.mc
+  
+  # preprocess for features
+  col.class.error <- FALSE
+  col.class.error.msg <- "\n"
+  col.class <- sapply(X,class)
+  for (i in 1:p) {
+    if (!(col.class[i] %in% c("logical","integer","numeric","factor"))) {
+      col.class.error.msg <- paste(
+        col.class.error.msg, 
+        sprintf("Column %d (%s) is type %s.\n", i, colnames(X)[i], col.class[i]),
+        sep="")
+      col.class.error <- T
+    }
+  }
+  if (col.class.error) {
+    col.class.error.msg <- paste(
+      col.class.error.msg, 
+      "Please convert above columns to the supported column types (logical/integer/numeric/factor).\n",
+      sep="")
+    stop(col.class.error.msg)
+  }
+  # find if any column has duplicate value
+  duplicate <- rep(FALSE, p)
+  for (i in 1:p) duplicate[i] <- (length(unique(X[,i])) < n)
+  # rescale logical and continuous inputs
+  if (rescale) {
+    for (i in 1:p) {
+      if (col.class[i]=="logical")
+        X[,i] <- 2 * (X[,i] - 0.5)
+      if (col.class[i] %in% c("integer","numeric"))
+        if (length(unique(X[,i])) > 1)
+          X[,i] <- c(scale(X[,i]))
+    }
+  }
+  
+  # argument check for n.knn
+  if (length(unique(y)) == 1) 
+    stop("y must have more than one unique value.")
+  if (is.null(n.knn)) {
+    if (length(unique(y)) > 2) {
+      n.knn <- 2
+    } else {
+      n.knn <- 3
+    }
+  }
+  
+  # get non-constant features 
+  non.constant.subset <- which(apply(X, 2, function(col) length(unique(col)) > 1))
+  
+  # compute total Sobol' indices
+  if (noise) {
+    noise.var <- exp.var.knn(
+      X = X,
+      y = y,
+      subset = non.constant.subset, 
+      duplicate = duplicate,
+      n.knn = n.knn, 
+      n.mc = n.mc,
+      twin.mc = twin.mc
+    )
+  } else {
+    noise.var <- 0
+  }
+  y.var <- max(stats::var(y) - noise.var, 0)
+  
+  if (y.var == 0) {
+    result <- list(ranking=c(1:p),explained.variance=rep(0,p))
+  } else {
+    ranking <- c()
+    explained.variance <- c()
+    subset <- non.constant.subset
+    while (length(subset) > 0) {
+      # compute total sobol' effect for -(x/{i}) (x for current subset)
+      if (is.null(parl)) {
+        nx.var <- sapply(subset, function(i) exp.var.knn(
+          X = X,
+          y = y,
+          subset = setdiff(subset, i),
+          duplicate = duplicate,
+          n.knn = n.knn, 
+          n.mc = n.mc,
+          twin.mc = twin.mc
+        ))
+      } else {
+        seeds <- sample(1:1e9, p)
+        clus <- parallel::makeCluster(parl)
+        parallel::clusterExport(clus, list("preproess.input","exp.var.knn"), envir=environment())
+        nx.var <- parallel::parSapply(clus, subset, function(i) exp.var.knn(
+          X = X,
+          y = y,
+          subset = setdiff(subset, i),
+          duplicate = duplicate,
+          n.knn = n.knn, 
+          n.mc = n.mc,
+          twin.mc = twin.mc,
+          random.seed = seeds[i]
+        ))
+        parallel::stopCluster(clus)
+      }
+      x.var <- pmax(y.var - nx.var, 0)
+      remove.ind <- unname(subset[which.max(x.var)])
+      ranking <- c(ranking, remove.ind)
+      explained.variance <- c(explained.variance, max(x.var) / y.var)
+      subset <- setdiff(subset, remove.ind)
+    }
+    ranking <- rev(ranking)
+    explained.variance <- c(rev(explained.variance)[-1], 1)
+    constant.subset <- setdiff(c(1:p), non.constant.subset)
+    ranking <- c(ranking, constant.subset)
+    explained.variance <- c(explained.variance, rep(1, length(constant.subset)))
+    result <- list(ranking=ranking,explained.variance=explained.variance)
+  }
+  
+  return (result)
+}
+
+
 #' @title 
 #' Factor Importance Ranking and Selection using Total (Sobol') indices
 #' 

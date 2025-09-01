@@ -1,6 +1,6 @@
 Package: first
 Title: Factor Importance Ranking and Selection using Total Indices
-Version: 2.0
+Version: 2.1
 Authors@R: c(
     person(given = "Chaofan",
            family = "Huang",
@@ -16,9 +16,9 @@ License: GPL (>= 2)
 Encoding: UTF-8
 RoxygenNote: 7.1.2
 NeedsCompilation: no
-Packaged: 2025-05-26 18:28:49 UTC; billhuang
+Packaged: 2025-09-01 07:43:40 UTC; billhuang
 Author: Chaofan Huang [aut, cre],
   V. Roshan Joseph [aut]
 Maintainer: Chaofan Huang <chaofan.huang@gatech.edu>
 Repository: CRAN
-Date/Publication: 2025-05-26 18:50:02 UTC
+Date/Publication: 2025-09-01 08:00:24 UTC
